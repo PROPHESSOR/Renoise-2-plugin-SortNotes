@@ -26,87 +26,90 @@ function getTrackInSequenceSelection(pattern, trkidx)
     end_column = track.visible_note_columns + track.visible_effect_columns,
   }
 end
+
 --[[
+
+function sort_line(table, line_idx)
+  table.sort(table, function(e1, e2)
+    return e1.voice_run[line_idx].note_value < e2.voice_run[line_idx].note_value
+  end)
+
+end
+
+function sort_by_note(line_runs, line_idx, selection)
+  local sorted = table.rcopy(line_runs)
+  self:sort_line(sorted, line_idx)
+
+  local low_col, high_col = selection.start_column, selection.end_column
+
+  for k, voice in ipairs(sorted) do
+
+    local num_lines = voice.voice_run.number_of_lines
+    local notecol = xVoiceRunner.get_initial_notecol(voice.voice_run)
+
+
+    local found_room,col_idx,upwards = self:find_note_column(notecol.note_value,line_idx,num_lines)
+
+    if found_room then
+      cTable.expand(self.temp_runs,col_idx)
+      table.insert(self.temp_runs[col_idx],voice.voice_run)
+      self:set_high_low_column(col_idx,notecol.note_value,notecol.note_value)
+    else
+      local initial_column = not col_idx
+      local exact_match = false
+      if initial_column then
+        col_idx = 1
+      else
+        local v = self.high_low_columns[col_idx]
+        if v then 
+          exact_match = (notecol.note_value == v.low_note)
+            and (notecol.note_value == v.high_note)
+        end
+      end
+
+      -- create column (but wait with assign...)
+      self:insert_temp_column(col_idx)
+
+      -- shift existing notes?
+      if not initial_column and not exact_match then
+        local source_col_idx = upwards and col_idx-1 or col_idx
+        local target_col_idx = upwards and col_idx or col_idx+1
+        local shifted = self:shift_runs(notecol.note_value,source_col_idx,target_col_idx,line_idx-1) 
+        if shifted then -- check where we've got room 
+          found_room,col_idx = self:find_note_column(notecol.note_value,line_idx,num_lines)
+        end
+      end
+      self:insert_note_run(col_idx,voice.voice_run,line_idx)
+    end
+
+  end
+
+end
+
 function sort(patterntrack,selection,trk_idx,seq_idx)
   local is_sorting_pattern = true
   local track = rns.tracks[trk_idx]
 
   local collect_mode = xVoiceRunner.COLLECT_MODE.SELECTION
-  self.runner:collect(patterntrack,collect_mode,self.selection,trk_idx,seq_idx)
+  self.runner:collect(patterntrack,collect_mode,selection,trk_idx,seq_idx)
 
   local voice_runs = self.runner.voice_runs
   if table.is_empty(voice_runs) then
     return true
   end
 
-  -- optimize: skip sorting when using particular methods
-  -- on a single column (result would be identical anyway)
-  if (#table.keys(voice_runs) == 1)
-    and ((self.sort_method == xVoiceSorter.SORT_METHOD.NORMAL)
-      or (self.sort_method == xVoiceSorter.SORT_METHOD.COMPACT))
-  then
-    LOG("Skip sorting single column with normal/compact method")
+  if (#table.keys(voice_runs) == 1) then
+    print("Skip sorting single column")
     return true
   end
 
-  -- prepare for unique sorting
-  if (self.sort_method == xVoiceSorter.SORT_METHOD.UNIQUE) then
-
-    -- build map of unique notes 
-    for k,v in pairs(self.runner.unique_notes) do
-      for k2,v2 in pairs(v) do
-        table.insert(self.unique_map,{
-          note_value = k,
-          instrument_value = self.unique_instrument and k2 or nil
-        })
-      end
-    end
-    if (#self.runner.unique_notes > xVoiceSorter.MAX_NOTE_COLUMNS) then
-      self.required_cols = table.rcopy(self.unique_map)
-      return false,xVoiceSorter.ERROR_CODE.TOO_MANY_COLS
-    end
-    -- TODO merge with sort_line_runs()
-    table.sort(self.unique_map,function(e1,e2)
-      if (self.sort_mode == xVoiceSorter.SORT_MODE.LOW_TO_HIGH) then
-        if (e1.note_value == e2.note_value) 
-          and (e1.instrument_value)
-          and (e2.instrument_value)
-        then
-          return e1.instrument_value < e2.instrument_value
-        else
-          return e1.note_value < e2.note_value
-        end
-      elseif (self.sort_mode == xVoiceSorter.SORT_MODE.HIGH_TO_LOW) then
-        if (e1.note_value == e2.note_value) 
-          and (e1.instrument_value)
-          and (e2.instrument_value)
-        then
-          return e1.instrument_value > e2.instrument_value
-        else
-          return e1.note_value > e2.note_value
-        end
-      end
-    end)
-
-  end
-
   -- sort - iterate through lines...
-  for line_idx = self.selection.start_line,self.selection.end_line do
+  for line_idx = selection.start_line,selection.end_line do
 
     local rslt,err = nil,nil
     local line_runs = xVoiceRunner.get_runs_on_line(voice_runs,line_idx)
 
-    if (self.sort_method == xVoiceSorter.SORT_METHOD.NORMAL) then
-      rslt,err = self:sort_by_note(line_runs,line_idx)
-    elseif (self.sort_method == xVoiceSorter.SORT_METHOD.COMPACT) then
-      rslt,err = self:sort_compact(line_runs,line_idx) 
-    elseif (self.sort_method == xVoiceSorter.SORT_METHOD.UNIQUE) then
-      rslt,err = self:sort_unique(line_runs,line_idx) 
-      if (#self.unique_map > xVoiceSorter.MAX_NOTE_COLUMNS) then
-        self.required_cols = table.rcopy(self.unique_map)
-        return false,xVoiceSorter.ERROR_CODE.TOO_MANY_COLS
-      end
-    end
+    rslt,err = self:sort_by_note(line_runs,line_idx)
 
     if err then
       return false,err
@@ -146,26 +149,26 @@ function sort(patterntrack,selection,trk_idx,seq_idx)
   -- are shifted sideways before we write the output...
   if shift_from then
     -- shift amount is equal to left side of selection + 
-    local selection_column_span = 1+self.selection.end_column-self.selection.start_column
+    local selection_column_span = 1+selection.end_column-selection.start_column
     column_shift = math.abs(num_sorted_cols-selection_column_span)
     if (column_shift > 0) then
       xColumns.shift_note_columns(
         patterntrack,
         shift_from,
         column_shift,
-        self.selection.start_line,
-        self.selection.end_line)
+        selection.start_line,
+        selection.end_line)
     end
   end
 
-  self.selection.end_column = math.max(visible_note_columns,self.selection.start_column+#self.temp_runs-1)
-  if (self.selection.end_column > 12) then
+  selection.end_column = math.max(visible_note_columns,selection.start_column+#self.temp_runs-1)
+  if (selection.end_column > 12) then
     return false,xVoiceSorter.ERROR_CODE.CANT_PRESERVE_EXISTING
   end
 
     -- align with the left side of selection by inserting empty columns 
     -- (not written to pattern - selection is masking them out)
-  local start_column = self.selection.start_column
+  local start_column = selection.start_column
   if (start_column > 1) then
     repeat
       table.insert(self.temp_runs,1,{})
@@ -184,7 +187,7 @@ function sort(patterntrack,selection,trk_idx,seq_idx)
     end
   end
 
-  self.runner:write(patterntrack,self.selection,trk_idx)
+  self.runner:write(patterntrack,selection,trk_idx)
   self.runner:purge_voices()
 
   return true
