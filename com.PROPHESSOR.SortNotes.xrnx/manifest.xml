@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RenoiseScriptingTool doc_version="0">
+  <ApiVersion>3</ApiVersion>
+  <AutoUpgraded>false</AutoUpgraded>
+  <Id>com.PROPHESSOR.SortNotes</Id>
+  <Version>1.0</Version>
+  <Author>PROPHESSOR [xenteze@gmail.com]</Author>
+  <Name>SortNotes</Name>
+  <Category>Pattern</Category>
+  <Description>A tool for sorting of notes in pattern</Description>
+  <Homepage></Homepage>
+</RenoiseScriptingTool>
